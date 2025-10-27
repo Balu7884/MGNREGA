@@ -1,0 +1,9 @@
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  font-family: "Roboto", "Helvetica", "Arial", sans-serif;
+  background: #f5f7fb;
+}
+
+* { box-sizing: border-box; }
+

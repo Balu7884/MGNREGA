@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import {
   AppBar,
   Toolbar,
@@ -38,25 +38,8 @@ import {
 import statesData from "./data/states_districts.json";
 import axios from "axios";
 
-/*
-  Fake Andhra Pradesh districts data (sample).
-*/
-const AP_DATA = [
-  { districtName: "Visakhapatnam", totalJobcards: 120000, totalWorkers: 310000, activeJobcards: 45000, activeWorkers: 125000, scWorkers: 15000, stWorkers: 5000, approvedLabourBudget: 12500000, persondaysCentral: 450000 },
-  { districtName: "Vijayawada", totalJobcards: 95000, totalWorkers: 240000, activeJobcards: 32000, activeWorkers: 98000, scWorkers: 12000, stWorkers: 3000, approvedLabourBudget: 9800000, persondaysCentral: 320000 },
-  { districtName: "Guntur", totalJobcards: 87000, totalWorkers: 210000, activeJobcards: 28000, activeWorkers: 87000, scWorkers: 11000, stWorkers: 2500, approvedLabourBudget: 8600000, persondaysCentral: 290000 },
-  { districtName: "Nellore", totalJobcards: 72000, totalWorkers: 180000, activeJobcards: 22000, activeWorkers: 72000, scWorkers: 9000, stWorkers: 2000, approvedLabourBudget: 7200000, persondaysCentral: 240000 },
-  { districtName: "Kurnool", totalJobcards: 65000, totalWorkers: 160000, activeJobcards: 19500, activeWorkers: 64000, scWorkers: 8500, stWorkers: 4000, approvedLabourBudget: 6800000, persondaysCentral: 210000 },
-  { districtName: "Anantapur", totalJobcards: 60000, totalWorkers: 150000, activeJobcards: 18000, activeWorkers: 59000, scWorkers: 8000, stWorkers: 4200, approvedLabourBudget: 6500000, persondaysCentral: 200000 },
-  { districtName: "Chittoor", totalJobcards: 58000, totalWorkers: 145000, activeJobcards: 17200, activeWorkers: 57000, scWorkers: 7700, stWorkers: 3500, approvedLabourBudget: 6300000, persondaysCentral: 190000 },
-  { districtName: "Prakasam", totalJobcards: 52000, totalWorkers: 125000, activeJobcards: 15000, activeWorkers: 48000, scWorkers: 6000, stWorkers: 2200, approvedLabourBudget: 5200000, persondaysCentral: 160000 },
-  { districtName: "Srikakulam", totalJobcards: 47000, totalWorkers: 115000, activeJobcards: 13700, activeWorkers: 42000, scWorkers: 5500, stWorkers: 1800, approvedLabourBudget: 4800000, persondaysCentral: 140000 },
-  { districtName: "YSR Kadapa", totalJobcards: 44000, totalWorkers: 108000, activeJobcards: 12800, activeWorkers: 40000, scWorkers: 5200, stWorkers: 1600, approvedLabourBudget: 4600000, persondaysCentral: 130000 },
-];
-
 export default function App() {
-  // main state
-  const [data] = useState(AP_DATA);
+  const [data, setData] = useState([]);
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("activeWorkers");
   const [sortDir, setSortDir] = useState("desc");
@@ -64,8 +47,38 @@ export default function App() {
   const [selectedState, setSelectedState] = useState("Andhra Pradesh");
   const [selectedDistrict, setSelectedDistrict] = useState("");
   const [loadingLocation, setLoadingLocation] = useState(false);
+  const [loadingData, setLoadingData] = useState(true);
+  const [error, setError] = useState(null);
 
-  // location detect handler
+  // ✅ Fetch data from backend
+  useEffect(() => {
+    async function fetchData() {
+      setLoadingData(true);
+      try {
+        const res = await axios.get("https://mgnrega-backend-xn8h.onrender.com/api/mgnrega/all");
+        const mapped = res.data.map((d) => ({
+          districtName: d.districtName,
+          totalJobcards: d.totalJobcardsIssued,
+          totalWorkers: d.totalWorkers,
+          activeJobcards: d.totalActiveJobcards,
+          activeWorkers: d.totalActiveWorkers,
+          scWorkers: d.scWorkersActive,
+          stWorkers: d.stWorkersActive,
+          approvedLabourBudget: d.approvedLabourBudget,
+          persondaysCentral: d.persondaysCentralLiability,
+        }));
+        setData(mapped);
+      } catch (err) {
+        console.error("Failed to fetch data", err);
+        setError("Failed to load district data from backend.");
+      } finally {
+        setLoadingData(false);
+      }
+    }
+    fetchData();
+  }, []);
+
+  // 📍 Detect location and auto-set state + district + filter
   const handleDetectLocation = async () => {
     if (!navigator.geolocation) {
       alert("Geolocation is not supported by your browser.");
@@ -80,13 +93,19 @@ export default function App() {
           const url = `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`;
           const res = await axios.get(url);
           const address = res.data.address || {};
-
           const state = address.state || "Andhra Pradesh";
-          const district = address.county || address.district || "";
+          const district = (address.county || address.district || "").toUpperCase();
+
+          // Normalize and find best match
+          const allDistricts = Object.values(statesData).flat().map((d) => d.toUpperCase());
+          const matchedDistrict = allDistricts.find((d) =>
+            district.includes(d) || d.includes(district)
+          );
 
           setSelectedState(state);
-          setSelectedDistrict(district);
-          alert(`📍 Detected Location: ${district}, ${state}`);
+          setSelectedDistrict(matchedDistrict || "");
+          setSearch(matchedDistrict || ""); // ✅ auto-filter data
+          alert(`📍 Detected Location: ${matchedDistrict || district}, ${state}`);
         } catch (err) {
           console.error(err);
           alert("Failed to detect location. Please try again.");
@@ -101,32 +120,36 @@ export default function App() {
     );
   };
 
-  // derived filtered & sorted data
+  // 🧮 Filter + sort logic (includes auto-filter by selectedDistrict)
   const filtered = useMemo(() => {
-    let arr = data.slice();
+    let arr = data ? [...data] : [];
 
-    if (search.trim()) {
+    if (selectedDistrict) {
+      const s = selectedDistrict.toLowerCase();
+      arr = arr.filter((d) => d.districtName?.toLowerCase().includes(s));
+    } else if (search.trim()) {
       const s = search.toLowerCase();
-      arr = arr.filter((d) => d.districtName.toLowerCase().includes(s));
+      arr = arr.filter((d) => d.districtName?.toLowerCase().includes(s));
     }
+
     if (minActiveWorkers) {
       const n = Number(minActiveWorkers) || 0;
-      arr = arr.filter((d) => d.activeWorkers >= n);
+      arr = arr.filter((d) => (d.activeWorkers ?? 0) >= n);
     }
 
     arr.sort((a, b) => {
-      const av = a[sortBy] ?? 0;
-      const bv = b[sortBy] ?? 0;
+      const av = a?.[sortBy] ?? 0;
+      const bv = b?.[sortBy] ?? 0;
       if (av === bv) return 0;
       const result = av > bv ? 1 : -1;
       return sortDir === "asc" ? result : -result;
     });
 
     return arr;
-  }, [data, search, sortBy, sortDir, minActiveWorkers]);
+  }, [data, search, selectedDistrict, sortBy, sortDir, minActiveWorkers]);
 
-  // export CSV
-  function handleExportCSV() {
+  // 📤 Export CSV
+  const handleExportCSV = () => {
     const headers = [
       "District",
       "Total Jobcards",
@@ -155,23 +178,40 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "ap_districts_mgnrega.csv";
+    a.download = "mgnrega_districts.csv";
     a.click();
     URL.revokeObjectURL(url);
-  }
+  };
 
-  // small stats
+  // 🧾 Summary stats
   const totals = useMemo(() => {
     return filtered.reduce(
       (acc, d) => {
-        acc.totalActiveWorkers += d.activeWorkers;
-        acc.totalApprovedBudget += d.approvedLabourBudget;
+        acc.totalActiveWorkers += d.activeWorkers || 0;
+        acc.totalApprovedBudget += d.approvedLabourBudget || 0;
         acc.count += 1;
         return acc;
       },
       { totalActiveWorkers: 0, totalApprovedBudget: 0, count: 0 }
     );
   }, [filtered]);
+
+  if (loadingData)
+    return (
+      <Box sx={{ textAlign: "center", mt: 10 }}>
+        <CircularProgress />
+        <Typography variant="h6" mt={2}>
+          Loading MGNREGA data...
+        </Typography>
+      </Box>
+    );
+
+  if (error)
+    return (
+      <Box sx={{ textAlign: "center", mt: 10, color: "red" }}>
+        <Typography variant="h6">{error}</Typography>
+      </Box>
+    );
 
   return (
     <div>
@@ -183,7 +223,6 @@ export default function App() {
 
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
         <Grid container spacing={3}>
-
           {/* Controls */}
           <Grid item xs={12}>
             <Card>
@@ -198,7 +237,9 @@ export default function App() {
                         onChange={(e) => setSelectedState(e.target.value)}
                       >
                         {Object.keys(statesData).map((s) => (
-                          <MenuItem key={s} value={s}>{s}</MenuItem>
+                          <MenuItem key={s} value={s}>
+                            {s}
+                          </MenuItem>
                         ))}
                       </Select>
                     </FormControl>
@@ -213,7 +254,9 @@ export default function App() {
                         onChange={(e) => setSelectedDistrict(e.target.value)}
                       >
                         {(statesData[selectedState] || []).map((d) => (
-                          <MenuItem key={d} value={d}>{d}</MenuItem>
+                          <MenuItem key={d} value={d}>
+                            {d}
+                          </MenuItem>
                         ))}
                       </Select>
                     </FormControl>
@@ -242,7 +285,12 @@ export default function App() {
                   </Grid>
 
                   <Grid item xs={6} md={2}>
-                    <Button variant="contained" startIcon={<ExportIcon />} onClick={handleExportCSV} fullWidth>
+                    <Button
+                      variant="contained"
+                      startIcon={<ExportIcon />}
+                      onClick={handleExportCSV}
+                      fullWidth
+                    >
                       Export CSV
                     </Button>
                   </Grid>
@@ -251,7 +299,7 @@ export default function App() {
             </Card>
           </Grid>
 
-          {/* Stats */}
+          {/* Summary Stats */}
           <Grid item xs={12} md={4}>
             <Card>
               <CardContent>
@@ -259,11 +307,15 @@ export default function App() {
                 <Typography variant="h5">{totals.count}</Typography>
                 <Box mt={2}>
                   <Typography variant="subtitle2">Total active workers</Typography>
-                  <Typography variant="h6">{totals.totalActiveWorkers.toLocaleString()}</Typography>
+                  <Typography variant="h6">
+                    {totals.totalActiveWorkers?.toLocaleString?.() ?? 0}
+                  </Typography>
                 </Box>
                 <Box mt={2}>
                   <Typography variant="subtitle2">Total approved budget</Typography>
-                  <Typography variant="h6">₹ {totals.totalApprovedBudget.toLocaleString()}</Typography>
+                  <Typography variant="h6">
+                    ₹ {totals.totalApprovedBudget?.toLocaleString?.() ?? 0}
+                  </Typography>
                 </Box>
               </CardContent>
             </Card>
@@ -271,9 +323,11 @@ export default function App() {
 
           {/* Charts */}
           <Grid item xs={12} md={8}>
-            <Card style={{ height: "100%" }}>
+            <Card sx={{ height: "100%" }}>
               <CardContent>
-                <Typography variant="h6" gutterBottom>Active workers by district</Typography>
+                <Typography variant="h6" gutterBottom>
+                  Active workers by district
+                </Typography>
                 <div style={{ width: "100%", height: 300 }}>
                   <ResponsiveContainer>
                     <BarChart data={filtered}>
@@ -287,7 +341,9 @@ export default function App() {
                 </div>
 
                 <Box mt={3}>
-                  <Typography variant="h6" gutterBottom>Persondays (central) vs Approved Budget</Typography>
+                  <Typography variant="h6" gutterBottom>
+                    Persondays (Central) vs Approved Budget
+                  </Typography>
                   <div style={{ width: "100%", height: 260 }}>
                     <ResponsiveContainer>
                       <LineChart data={filtered}>
@@ -309,7 +365,9 @@ export default function App() {
           <Grid item xs={12}>
             <Card>
               <CardContent>
-                <Typography variant="h6" gutterBottom>District details</Typography>
+                <Typography variant="h6" gutterBottom>
+                  District details
+                </Typography>
                 <TableContainer component={Paper}>
                   <Table>
                     <TableHead>
@@ -328,20 +386,38 @@ export default function App() {
                     <TableBody>
                       {filtered.map((row) => (
                         <TableRow key={row.districtName}>
-                          <TableCell component="th" scope="row">{row.districtName}</TableCell>
-                          <TableCell align="right">{row.totalJobcards.toLocaleString()}</TableCell>
-                          <TableCell align="right">{row.totalWorkers.toLocaleString()}</TableCell>
-                          <TableCell align="right">{row.activeJobcards.toLocaleString()}</TableCell>
-                          <TableCell align="right">{row.activeWorkers.toLocaleString()}</TableCell>
-                          <TableCell align="right">{row.scWorkers.toLocaleString()}</TableCell>
-                          <TableCell align="right">{row.stWorkers.toLocaleString()}</TableCell>
-                          <TableCell align="right">₹ {row.approvedLabourBudget.toLocaleString()}</TableCell>
-                          <TableCell align="right">{row.persondaysCentral.toLocaleString()}</TableCell>
+                          <TableCell>{row.districtName || "N/A"}</TableCell>
+                          <TableCell align="right">
+                            {row.totalJobcards?.toLocaleString?.() ?? 0}
+                          </TableCell>
+                          <TableCell align="right">
+                            {row.totalWorkers?.toLocaleString?.() ?? 0}
+                          </TableCell>
+                          <TableCell align="right">
+                            {row.activeJobcards?.toLocaleString?.() ?? 0}
+                          </TableCell>
+                          <TableCell align="right">
+                            {row.activeWorkers?.toLocaleString?.() ?? 0}
+                          </TableCell>
+                          <TableCell align="right">
+                            {row.scWorkers?.toLocaleString?.() ?? 0}
+                          </TableCell>
+                          <TableCell align="right">
+                            {row.stWorkers?.toLocaleString?.() ?? 0}
+                          </TableCell>
+                          <TableCell align="right">
+                            ₹ {row.approvedLabourBudget?.toLocaleString?.() ?? 0}
+                          </TableCell>
+                          <TableCell align="right">
+                            {row.persondaysCentral?.toLocaleString?.() ?? 0}
+                          </TableCell>
                         </TableRow>
                       ))}
                       {filtered.length === 0 && (
                         <TableRow>
-                          <TableCell colSpan={9} align="center">No districts match the filters.</TableCell>
+                          <TableCell colSpan={9} align="center">
+                            No districts match the filters.
+                          </TableCell>
                         </TableRow>
                       )}
                     </TableBody>
@@ -350,7 +426,6 @@ export default function App() {
               </CardContent>
             </Card>
           </Grid>
-
         </Grid>
       </Container>
     </div>
